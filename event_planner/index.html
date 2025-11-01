@@ -1,0 +1,279 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Event Finder</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/algoliasearch@4.10.5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/instantsearch.js@4.49.0"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background-color: #f4f4f4;
+    }
+    nav {
+      background-color: #333;
+      padding: 15px 20px;
+      display: flex;
+      justify-content: center;
+    }
+    nav a {
+      color: white;
+      text-decoration: none;
+      margin: 0 15px;
+      font-size: 18px;
+      padding: 8px 12px;
+    }
+    nav a:hover {
+      background-color: #575757;
+      border-radius: 5px;
+    }
+    h1, h2 {
+      text-align: center;
+      margin-top: 20px;
+    }
+    form {
+      text-align: center;
+      margin: 20px 0;
+    }
+    input[type="text"] {
+      padding: 10px;
+      width: 80%;
+      max-width: 400px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+    button {
+      padding: 10px 15px;
+      background-color: #333;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-left: 10px;
+    }
+    button:hover {
+      background-color: #575757;
+    }
+
+    /* Grid containers */
+    #results,
+    #related-recommendations,
+    #basket-recommendations {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 30px;
+      padding: 20px;
+      margin: 0 auto;
+      max-width: 1600px;
+    }
+
+    .event-card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      transition: transform 0.2s ease-in-out;
+    }
+    .event-card:hover {
+      transform: scale(1.02);
+    }
+    .event-card h3 {
+      margin: 10px 0;
+    }
+    .event-card p {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+    .event-card a, .event-card button {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-radius: 5px;
+      text-decoration: none;
+      color: white;
+      background-color: #007bff;
+      border: none;
+    }
+    .event-card a:hover, .event-card button:hover {
+      background-color: #0056b3;
+    }
+    .loading {
+      font-size: 16px;
+      font-weight: bold;
+      color: #666;
+      text-align: center;
+      grid-column: 1 / -1;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Find Events in the UK</h1>
+<nav>
+  <a href="index.html">Home</a>
+  <a href="php/events.php">View Events</a>
+  <a href="php/recommend.php">Recommend</a>
+  <a href="php/event_basket.php">Event Basket</a>
+</nav>
+
+<form id="searchForm">
+  <input type="text" id="searchQuery" name="searchQuery" placeholder="Search events..." />
+  <button type="submit">Search</button>
+</form>
+
+<h2>Search Results</h2>
+<div id="results" class="results-container loading">No events found.</div>
+
+<h2>Related Recommendations</h2>
+<div id="related-recommendations" class="loading">Loading recommendations...</div>
+
+<h2>Recommended for You (Based on Basket)</h2>
+<div id="basket-recommendations" class="loading">Loading your recommendations...</div>
+
+<script>
+const escapeHtml = text =>
+  String(text).replace(/[&<>"']/g, m =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m])
+  );
+
+function createEventCard(event) {
+  const card = document.createElement('div');
+  card.classList.add('event-card');
+  const encoded = encodeURIComponent(JSON.stringify(event));
+  const price = event.price ? `£${escapeHtml(event.price)}` : 'N/A';
+  card.innerHTML = `
+    <h3>${escapeHtml(event.title)}</h3>
+    <p><strong>📍 Location:</strong> ${escapeHtml(event.location)}</p>
+    <p><strong>📅 Date:</strong> ${new Date(event.start_time).toLocaleString()}</p>
+    <p><strong>🏷 Category:</strong> ${escapeHtml(event.category)}</p>
+    <p><strong>💷 Price:</strong> ${price}</p>
+    <p>${escapeHtml(event.description)}</p>
+    <a href="${escapeHtml(event.event_url)}" target="_blank">View Details</a>
+    <button class="add-to-basket-btn" data-event='${encoded}'>Add to Basket</button>`;
+  return card;
+}
+
+function attachBasketListeners(containerId) {
+  const container = document.getElementById(containerId);
+  container.querySelectorAll('.add-to-basket-btn').forEach(button => {
+    button.addEventListener('click', () => {
+      const eventData = JSON.parse(decodeURIComponent(button.dataset.event));
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = 'php/add_to_basket.php';
+      for (let field of ['event_id', 'title', 'location', 'start_time', 'category', 'description', 'event_url', 'price']) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = field;
+        input.value = eventData[field] || '';
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    });
+  });
+}
+
+document.getElementById('searchForm').addEventListener('submit', function (event) {
+  event.preventDefault();
+  let query = document.getElementById('searchQuery').value.trim();
+  let resultsDiv = document.getElementById('results');
+  resultsDiv.className = 'results-container';
+  resultsDiv.innerHTML = '<p class="loading">Searching...</p>';
+  let relatedDiv = document.getElementById('related-recommendations');
+  relatedDiv.innerHTML = '<p class="loading">Loading...</p>';
+
+  if (query !== "") {
+    fetch('php/search_events.php?q=' + encodeURIComponent(query))
+      .then(response => response.json())
+      .then(data => {
+        resultsDiv.className = 'results-container';
+        resultsDiv.innerHTML = data.length > 0 ? '' : '<p class="loading">No events found.</p>';
+        const firstCategory = data.length > 0 ? data[0].category : '';
+        data.forEach(event => {
+          const card = createEventCard(event);
+          resultsDiv.appendChild(card);
+        });
+        attachBasketListeners('results');
+        fetchRelatedRecommendations(firstCategory);
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        resultsDiv.innerHTML = '<p class="loading">Error fetching results.</p>';
+      });
+  }
+});
+
+function fetchRelatedRecommendations(category) {
+  const client = algoliasearch('OBC54GU5RH', '56b476462484d34ca9c63183fcb3f2cb');
+  const index = client.initIndex('events');
+  index.search('', {
+    filters: `category:"${category}"`,
+    hitsPerPage: 5
+  }).then(({ hits }) => {
+    const container = document.getElementById('related-recommendations');
+    container.className = 'results-container';
+    container.innerHTML = hits.length ? '' : '<p class="loading">No related recommendations found.</p>';
+    hits.forEach(hit => {
+      const event = {
+        event_id: hit.objectID,
+        title: hit.title || '',
+        location: hit.location || '',
+        start_time: hit.start_time || '',
+        category: hit.category || '',
+        description: hit.description || '',
+        event_url: hit.event_url || '',
+        price: hit.price || ''
+      };
+      const card = createEventCard(event);
+      container.appendChild(card);
+    });
+    attachBasketListeners('related-recommendations');
+  });
+}
+
+function fetchBasketRecommendations() {
+  fetch('php/get_basket_recommendations.php')
+    .then(response => response.json())
+    .then(keywords => {
+      const container = document.getElementById('basket-recommendations');
+      container.className = 'results-container';
+      if (!keywords || keywords.length === 0) {
+        container.innerHTML = '<p class="loading">No basket-based recommendations.</p>';
+        return;
+      }
+      const client = algoliasearch('OBC54GU5RH', '56b476462484d34ca9c63183fcb3f2cb');
+      const index = client.initIndex('events');
+      const filterStr = keywords.map(k => `category:"${k}"`).join(' OR ');
+      index.search('', {
+        filters: filterStr,
+        hitsPerPage: 5
+      }).then(({ hits }) => {
+        container.innerHTML = hits.length ? '' : '<p class="loading">No personalized recommendations.</p>';
+        hits.forEach(hit => {
+          const event = {
+            event_id: hit.objectID,
+            title: hit.title || '',
+            location: hit.location || '',
+            start_time: hit.start_time || '',
+            category: hit.category || '',
+            description: hit.description || '',
+            event_url: hit.event_url || '',
+            price: hit.price || ''
+          };
+          const card = createEventCard(event);
+          container.appendChild(card);
+        });
+        attachBasketListeners('basket-recommendations');
+      });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', fetchBasketRecommendations);
+</script>
+</body>
+</html>
